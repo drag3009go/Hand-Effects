@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hand Effects</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      background-color: #000;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+    }
+    .container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+    video, canvas {
+      position: absolute;
+      transform: scaleX(-1);
+      object-fit: cover;
+      width: 100%;
+      height: 100%;
+    }
+    #output_canvas {
+      z-index: 5;
+    }
+    #modal {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      backdrop-filter: blur(25px) saturate(180%);
+      -webkit-backdrop-filter: blur(25px) saturate(180%);
+      transition: opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+    .card {
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 30px;
+      padding: 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-shadow: 0 30px 60px rgba(0, 0, 0, 0.4);
+      max-width: 420px;
+      width: 90%;
+    }
+    .card h1 {
+      color: #ffffff;
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    .card p {
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 14px;
+      margin-bottom: 28px;
+      text-align: center;
+    }
+    .btn-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      width: 100%;
+    }
+    .effect-btn {
+      background: rgba(255, 255, 255, 0.15);
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 14px 20px;
+      font-size: 16px;
+      font-weight: 500;
+      border-radius: 16px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    .effect-btn:hover {
+      background: rgba(255, 255, 255, 0.3);
+      transform: scale(1.02);
+    }
+    .effect-btn:active {
+      transform: scale(0.98);
+    }
+    #loading {
+      position: absolute;
+      top: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: -0.2px;
+      z-index: 10;
+      background: rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      padding: 8px 16px;
+      border-radius: 20px;
+      display: none;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <div class="container">
+    <div id="modal">
+      <div class="card">
+        <h1>Выбор эффекта</h1>
+        <p>Выберите визуальный режим для маски</p>
+        <div class="btn-stack">
+          <button class="effect-btn" onclick="selectEffect('rainbow-blue')">🌌 Радужный синий</button>
+          <button class="effect-btn" onclick="selectEffect('thermal')">🔥 Тепловизор</button>
+          <button class="effect-btn" onclick="selectEffect('negative')">❄️ Негатив</button>
+          <button class="effect-btn" onclick="selectEffect('pixel')">👾 Пикселизация</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="loading">Загрузка модуля камеры...</div>
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="output_canvas"></canvas>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('webcam');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const modal = document.getElementById('modal');
+    const loadingDiv = document.getElementById('loading');
+
+    const bufferCanvas = document.createElement('canvas');
+    const bufferCtx = bufferCanvas.getContext('2d');
+
+    let currentEffect = 'rainbow-blue';
+    let isCameraStarted = false;
+    let hueRotation = 0;
+
+    function resizeCanvas() {
+      canvasElement.width = window.innerWidth;
+      canvasElement.height = window.innerHeight;
+      bufferCanvas.width = window.innerWidth;
+      bufferCanvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function selectEffect(effect) {
+      currentEffect = effect;
+      modal.style.opacity = '0';
+      setTimeout(() => {
+        modal.style.display = 'none';
+      }, 400);
+      
+      loadingDiv.style.display = 'block';
+
+      if (!isCameraStarted) {
+        initMediaPipe();
+        isCameraStarted = true;
+      }
+    }
+
+    let hands;
+    function initMediaPipe() {
+      hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 0,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+      });
+
+      hands.onResults(onResults);
+
+      const camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await hands.send({ image: videoElement });
+        },
+        width: 1280,
+        height: 720
+      });
+
+      camera.start();
+    }
+
+    function onResults(results) {
+      loadingDiv.style.display = 'none';
+
+      const width = canvasElement.width;
+      const height = canvasElement.height;
+
+      canvasCtx.clearRect(0, 0, width, height);
+      canvasCtx.drawImage(results.image, 0, 0, width, height);
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const points = [];
+
+        for (const landmarks of results.multiHandLandmarks) {
+          points.push({ x: landmarks[8].x * width, y: landmarks[8].y * height });
+          points.push({ x: landmarks[4].x * width, y: landmarks[4].y * height });
+        }
+
+        if (points.length >= 3) {
+          applyMaskEffect(results.image, points, width, height);
+        }
+      }
+    }
+
+    function applyMaskEffect(image, points, width, height) {
+      bufferCtx.clearRect(0, 0, width, height);
+
+      if (currentEffect === 'rainbow-blue') {
+        hueRotation = (hueRotation + 2) % 60; 
+        const currentHue = 190 + hueRotation; 
+        
+        bufferCtx.drawImage(image, 0, 0, width, height);
+        bufferCtx.filter = `invert(80%) hue-rotate(${currentHue}deg) saturate(400%) contrast(150%)`;
+        bufferCtx.drawImage(bufferCanvas, 0, 0);
+        bufferCtx.filter = 'none';
+
+      } else if (currentEffect === 'thermal') {
+        bufferCtx.drawImage(image, 0, 0, width, height);
+        bufferCtx.filter = 'invert(100%) hue-rotate(180deg) contrast(200%) saturate(300%)';
+        bufferCtx.drawImage(bufferCanvas, 0, 0);
+        bufferCtx.filter = 'none';
+
+      } else if (currentEffect === 'negative') {
+        bufferCtx.drawImage(image, 0, 0, width, height);
+        bufferCtx.filter = 'invert(100%) contrast(120%)';
+        bufferCtx.drawImage(bufferCanvas, 0, 0);
+        bufferCtx.filter = 'none';
+
+      } else if (currentEffect === 'pixel') {
+        const pixelSize = 0.03;
+        const smallW = Math.max(1, Math.floor(width * pixelSize));
+        const smallH = Math.max(1, Math.floor(height * pixelSize));
+
+        bufferCtx.imageSmoothingEnabled = false;
+        bufferCtx.drawImage(image, 0, 0, smallW, smallH);
+        bufferCtx.drawImage(bufferCanvas, 0, 0, smallW, smallH, 0, 0, width, height);
+        bufferCtx.imageSmoothingEnabled = true;
+      }
+
+      canvasCtx.save();
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(points[0].x, points[0].y);
+
+      for (let i = 1; i < points.length; i++) {
+        canvasCtx.lineTo(points[i].x, points[i].y);
+      }
+      canvasCtx.closePath();
+
+      canvasCtx.clip();
+      canvasCtx.drawImage(bufferCanvas, 0, 0);
+
+      canvasCtx.strokeStyle = currentEffect === 'rainbow-blue' ? '#007aff' : (currentEffect === 'negative' ? '#ffffff' : '#00ffff');
+      canvasCtx.lineWidth = 3;
+      canvasCtx.stroke();
+
+      canvasCtx.restore();
+    }
+  </script>
+</body>
+</html>
